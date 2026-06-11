@@ -4,6 +4,12 @@ import pandas as pd
 import yfinance as yf
 
 
+try:
+    from nsepythonserver import option_chain as nse_option_chain
+except Exception:
+    nse_option_chain = None
+
+
 class NSEDataLoader:
     def __init__(self):
         self.base_url = "https://www.nseindia.com"
@@ -32,13 +38,25 @@ class NSEDataLoader:
 
     def fetch_option_chain(self, symbol, instrument_type="index"):
         """
-        Fetch live option-chain data from NSE.
+        Fetch live NSE option-chain data.
 
-        instrument_type:
-        - index  : NIFTY, BANKNIFTY
-        - equity : RELIANCE, TCS, INFY, etc.
+        Primary method:
+        - nsepythonserver, better for Google Colab/server environments.
+
+        Backup method:
+        - Direct NSE endpoint.
         """
 
+        # Method 1: nsepythonserver
+        if nse_option_chain is not None:
+            try:
+                payload = nse_option_chain(symbol)
+                if payload and "records" in payload:
+                    return payload
+            except Exception as exc:
+                print(f"nsepythonserver failed for {symbol}: {exc}")
+
+        # Method 2: direct NSE endpoint fallback
         if instrument_type == "index":
             url = f"{self.base_url}/api/option-chain-indices?symbol={symbol}"
         else:
@@ -57,13 +75,26 @@ class NSEDataLoader:
         """
         Select nearest-expiry ATM option.
 
-        option_type:
-        - CE for Call option
-        - PE for Put option
+        CE = Call option
+        PE = Put option
         """
 
         records = raw_json["records"]["data"]
-        underlying = raw_json["records"]["underlyingValue"]
+
+        if "underlyingValue" in raw_json["records"]:
+            underlying = raw_json["records"]["underlyingValue"]
+        else:
+            valid_underlying_values = []
+
+            for row in records:
+                if option_type in row and "underlyingValue" in row[option_type]:
+                    valid_underlying_values.append(row[option_type]["underlyingValue"])
+
+            if not valid_underlying_values:
+                raise ValueError("Underlying value not found in NSE option-chain data.")
+
+            underlying = valid_underlying_values[0]
+
         expiries = raw_json["records"]["expiryDates"]
 
         if not expiries:
@@ -110,10 +141,6 @@ class NSEDataLoader:
 def fetch_historical_prices(yahoo_symbol, start_date, end_date=None):
     """
     Fetch historical price data using Yahoo Finance.
-    Examples:
-    ^NSEI       = NIFTY 50
-    ^NSEBANK   = BANKNIFTY
-    RELIANCE.NS = Reliance Industries NSE
     """
 
     df = yf.download(
